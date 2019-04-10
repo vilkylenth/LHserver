@@ -468,9 +468,15 @@ void Spell::EffectSchoolDMG(SpellEffectIndex effect_idx)
                 // Ferocious Bite
                 if (m_spellInfo->IsFitToFamilyMask<CF_DRUID_RIP_BITE>() && m_spellInfo->SpellVisual == 6587)
                 {
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_11_2
+                    // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+                    // - Ferocious Bite: Book of Ferocious Bite (Rank 5) now drops off The
+                    //   Beast in Black Rock Spire. In addition, Ferocious Bite now increases
+                    //   in potency with greater attack power.
                     // ( AP * 3% * combo + energy * 2,7 + damage )
                     if (uint32 combo = ((Player*)m_caster)->GetComboPoints())
                         damage += int32(m_caster->GetTotalAttackPowerValue(BASE_ATTACK) * combo * 0.03f);
+#endif
                     damage += int32(m_caster->GetPower(POWER_ENERGY) * m_spellInfo->DmgMultiplier[effect_idx]);
                     m_caster->SetPower(POWER_ENERGY, 0);
                 }
@@ -478,12 +484,17 @@ void Spell::EffectSchoolDMG(SpellEffectIndex effect_idx)
             }
             case SPELLFAMILY_ROGUE:
             {
-                // Eviscerate
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_11_2
+                // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+                // - Eviscerate: Manual of Eviscerate (Rank 9) now drops off Blackhand
+                //   Assassins in Black Rock Spire.In addition, Eviscerate now increases
+                //   in potency with greater attack power.
                 if (m_spellInfo->IsFitToFamilyMask<CF_ROGUE_EVISCERATE>() && m_caster->GetTypeId() == TYPEID_PLAYER)
                 {
                     if (uint32 combo = ((Player*)m_caster)->GetComboPoints())
                         damage += int32(m_caster->GetTotalAttackPowerValue(BASE_ATTACK) * combo * 0.03f);
                 }
+#endif
                 break;
             }
             case SPELLFAMILY_HUNTER:
@@ -553,7 +564,16 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                 case 19395: // Gordunni Trap
                 {
                     if (unitTarget && unitTarget->GetTypeId() == TYPEID_PLAYER)
-                        unitTarget->CastSpell(unitTarget, urand(0, 1) ? 19394 : 11756, true);
+                    {
+                        // If GameObject casting was implemented, or activating a trap actually despawned it, this wouldn't be needed.
+                        if (GameObject* pObject = unitTarget->FindNearestGameObject(144050, INTERACTION_DISTANCE))
+                        {
+                            if (pObject->HasStaticDBSpawnData())
+                                unitTarget->CastSpell(unitTarget, urand(0, 1) ? 19394 : 11756, true);
+                            else
+                                pObject->AddObjectToRemoveList();
+                        }
+                    }
 
                     return;
                 }
@@ -562,7 +582,7 @@ void Spell::EffectDummy(SpellEffectIndex eff_idx)
                     m_caster->HandleEmote(EMOTE_ONESHOT_BOW);
                     return;
                 }
-                case 27798: //Nature's Bounty
+                case 27798: // Nature's Bounty
                 {
                     switch(unitTarget->getPowerType())
                     {
@@ -3906,23 +3926,25 @@ void Spell::EffectTameCreature(SpellEffectIndex /*eff_idx*/)
 
 void Spell::EffectSummonPet(SpellEffectIndex eff_idx)
 {
-    ObjectGuid petGuid = m_caster->EffectSummonPet(m_spellInfo->Id, m_spellInfo->EffectMiscValue[eff_idx]);
+    uint32 petLevel = m_caster->IsPlayer() ? m_caster->getLevel() : std::max(int32(m_caster->getLevel()) + int32(m_spellInfo->EffectMultipleValue[eff_idx]), 1);
+
+    ObjectGuid petGuid = m_caster->EffectSummonPet(m_spellInfo->Id, m_spellInfo->EffectMiscValue[eff_idx], petLevel);
     if (petGuid)
         AddExecuteLogInfo(eff_idx, ExecuteLogInfo(petGuid));
 }
 
-ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
+ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petEntry, uint32 petLevel)
 {
     Pet *OldSummon = GetPet();
 
     // if pet requested type already exist
     if (OldSummon)
     {
-        if (petentry == 0 || OldSummon->GetEntry() == petentry)
+        if (petEntry == 0 || OldSummon->GetEntry() == petEntry)
         {
             if (OldSummon->isDead())
             {
-                if (petentry) // Warlock pet
+                if (petEntry) // Warlock pet
                     OldSummon->Unsummon(PET_SAVE_NOT_IN_SLOT);
                 else
                     return ObjectGuid(); // pet in corpse state can't be summoned
@@ -3936,19 +3958,19 @@ ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
             return ObjectGuid();
     }
 
-    CreatureInfo const* cInfo = petentry ? sCreatureStorage.LookupEntry<CreatureInfo>(petentry) : NULL;
+    CreatureInfo const* cInfo = petEntry ? sCreatureStorage.LookupEntry<CreatureInfo>(petEntry) : NULL;
 
     // == 0 in case call current pet, check only real summon case
-    if (petentry && !cInfo)
+    if (petEntry && !cInfo)
     {
-        sLog.outErrorDb("EffectSummonPet: creature entry %u not found for spell %u.", petentry, spellId);
+        sLog.outErrorDb("EffectSummonPet: creature entry %u not found for spell %u.", petEntry, spellId);
         return ObjectGuid();
     }
 
     Pet* NewSummon = new Pet;
 
-    // petentry==0 for hunter "call pet" (current pet summoned if any)
-    if (GetTypeId() == TYPEID_PLAYER && NewSummon->LoadPetFromDB((Player*)this, petentry))
+    // petEntry==0 for hunter "call pet" (current pet summoned if any)
+    if (GetTypeId() == TYPEID_PLAYER && NewSummon->LoadPetFromDB((Player*)this, petEntry))
     {
         if (NewSummon->getPetType() == SUMMON_PET)
         {
@@ -3969,7 +3991,7 @@ ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
     }
 
     // not error in case fail hunter call pet
-    if (!petentry)
+    if (!petEntry)
     {
         delete NewSummon;
         return ObjectGuid();
@@ -3985,7 +4007,6 @@ ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
         return ObjectGuid();
     }
 
-    uint32 petlevel = getLevel();
     NewSummon->SetSummonPoint(pos);
 
     NewSummon->setPetType(SUMMON_PET);
@@ -4013,7 +4034,7 @@ ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
     if (IsPvP())
         NewSummon->SetPvP(true);
 
-    NewSummon->InitStatsForLevel(petlevel, this);
+    NewSummon->InitStatsForLevel(petLevel, this);
     NewSummon->InitPetCreateSpells();
 
     if (NewSummon->getPetType() == SUMMON_PET)
@@ -4032,7 +4053,7 @@ ObjectGuid Unit::EffectSummonPet(uint32 spellId, uint32 petentry)
         }
 
         // generate new name for summon pet
-        std::string new_name = sObjectMgr.GeneratePetName(petentry);
+        std::string new_name = sObjectMgr.GeneratePetName(petEntry);
         if (!new_name.empty())
             NewSummon->SetName(new_name);
     }
@@ -4451,6 +4472,15 @@ void Spell::EffectScriptEffect(SpellEffectIndex eff_idx)
                     }
 
                     m_caster->CastSpell(m_caster, spell_id, true, nullptr);
+                    return;
+                }
+                case 10101:                                 // Knock Away
+                {
+                    if (!unitTarget)
+                        return;
+
+                    m_caster->getThreatManager().modifyThreatPercent(unitTarget, -100);
+
                     return;
                 }
                 case 17512:                                 // Piccolo of the Flaming Fire
@@ -5085,20 +5115,42 @@ void Spell::EffectSanctuary(SpellEffectIndex eff_idx)
     if (!unitTarget)
         return;
 
+    // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+    // - Neutral guards are now able to see through the rogue Vanish ability.
+    bool guard_check = m_spellInfo->IsFitToFamily<SPELLFAMILY_ROGUE, CF_ROGUE_VANISH>() && (sWorld.GetWowPatch() >= WOW_PATCH_112);
+    bool no_guards = true;
+
     unitTarget->InterruptSpellsCastedOnMe(true);
     unitTarget->CombatStop();
-    unitTarget->getHostileRefManager().deleteReferences();  // stop all fighting
+
+    HostileReference* pReference = unitTarget->getHostileRefManager().getFirst();
+
+    while (pReference)
+    {
+        HostileReference* pNextRef = pReference->next();
+        if (!guard_check || !pReference->getSource()->getOwner()->IsContestedGuard())
+        {
+            pReference->removeReference();
+            delete pReference;
+        }
+        else
+            no_guards = false;
+
+        pReference = pNextRef;
+    }
+    
     unitTarget->m_lastSanctuaryTime = WorldTimer::getMSTime();
 
     // Vanish allows to remove all threat and cast regular stealth so other spells can be used
     if (m_spellInfo->IsFitToFamily<SPELLFAMILY_ROGUE, CF_ROGUE_VANISH>())
     {
         m_caster->RemoveSpellsCausingAura(SPELL_AURA_MOD_ROOT);
-        unitTarget->InterruptAttacksOnMe();
+        unitTarget->InterruptAttacksOnMe(0.0f, guard_check);
 
         if (auto pPlayer = m_caster->ToPlayer())
         {
-            pPlayer->SetCannotBeDetectedTimer(1000);
+            if (no_guards)
+                pPlayer->SetCannotBeDetectedTimer(1000);
         }
     }
 

@@ -26,7 +26,7 @@ struct MANGOS_DLL_DECL ScriptedAI : CreatureAI
     //CreatureAI Functions
     //*************
 
-    // Called if IsVisible(Unit *who) is true at each *who move
+    // Called when an unit moves within visibility distance
     void MoveInLineOfSight(Unit*) override;
 
     // Called at each attack of m_creature by any victim
@@ -73,6 +73,9 @@ struct MANGOS_DLL_DECL ScriptedAI : CreatureAI
 
     // Called at waypoint reached or PointMovement end
     void MovementInform(uint32, uint32) override {}
+
+    // Called when populating the loot table for this creature
+    bool FillLoot(Loot* loot, Player* looter) const override;
 
     //*************
     // Variables
@@ -129,16 +132,13 @@ struct MANGOS_DLL_DECL ScriptedAI : CreatureAI
     void GetPlayersWithinRange(std::list<Player*>& players, float range);
 
     // Get the nearest player target within range
-    Player* GetNearestPlayer(float range);
+    Player* GetNearestHostilePlayer(float range);
 
     // Spawns a creature relative to m_creature
     Creature* DoSpawnCreature(uint32 uiId, float fX, float fY, float fZ, float fAngle, uint32 uiType, uint32 uiDespawntime);
 
     // Spawns a creature at a random position around m_creature
     Creature* DoSpawnCreature(uint32 id, float dist, uint32 type, uint32 despawntime);
-
-    // Returns spells that meet the specified criteria from the creatures spell list
-    SpellEntry const* SelectSpell(Unit* pTarget, int32 uiSchool, int32 uiMechanic, SelectTarget selectTargets, uint32 uiPowerCostMin, uint32 uiPowerCostMax, float fRangeMin, float fRangeMax, SelectEffect selectEffect);
 
     void SetEquipmentSlots(bool bLoadDefault, int32 uiMainHand = EQUIP_NO_CHANGE, int32 uiOffHand = EQUIP_NO_CHANGE, int32 uiRanged = EQUIP_NO_CHANGE);
 

@@ -1522,7 +1522,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, uint32 effectMask)
             if (!(m_spellInfo->AttributesEx & SPELL_ATTR_EX_NOT_BREAK_STEALTH))
             {
                 unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                unit->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
             }
 
             // for delayed spells ignore not visible explicit target
@@ -1544,12 +1544,12 @@ void Spell::DoSpellHitOnUnit(Unit *unit, uint32 effectMask)
                 if (m_spellInfo->AttributesEx & SPELL_ATTR_EX_NOT_BREAK_STEALTH)
                 {
                     unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                    unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                    unit->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
                 }
 
                 // caster can be detected but have stealth aura
                 m_caster->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                m_caster->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                m_caster->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
 
                 // Fait dans Unit::DealDamage, car etre assis ou debout change le % de critiques par exemple.
                 //if (!unit->IsStandState() && !unit->hasUnitState(UNIT_STAT_STUNNED))
@@ -4196,6 +4196,17 @@ void Spell::finish(bool ok)
         m_caster->AttackStop();
         m_caster->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
     }
+    else if ((m_spellInfo->AttributesEx & SPELL_ATTR_EX_MELEE_COMBAT_START))
+    {
+        // Pets should initiate melee combat on spell with this flag. (Growl)
+        if (Pet* pPet = m_caster->ToPet())
+            if (pPet->AI() && pPet->GetCharmInfo())
+                if (Unit* const pTarget = m_targets.getUnitTarget())
+                {
+                    pPet->GetCharmInfo()->SetIsCommandAttack(true);
+                    pPet->AI()->AttackStart(pTarget);
+                }
+    }
 }
 
 void Spell::SendCastResult(SpellCastResult result)
@@ -4227,15 +4238,7 @@ void Spell::SendCastResult(Player* caster, SpellEntry const* spellInfo, SpellCas
                 data << uint32(spellInfo->RequiresSpellFocus);
                 break;
             case SPELL_FAILED_REQUIRES_AREA:
-                switch (spellInfo->Id)
-                {
-                    case 22564:
-                    case 22563:
-                    case 23538:
-                    case 23539:
-                        data << uint32(2597);
-                        break;
-                }
+                data << uint32(sSpellMgr.GetRequiredAreaForSpell(spellInfo->Id));
                 break;
             case SPELL_FAILED_EQUIPPED_ITEM_CLASS:
                 data << uint32(spellInfo->EquippedItemClass);
@@ -4994,7 +4997,8 @@ void Spell::HandleEffects(Unit *pUnitTarget, Item *pItemTarget, GameObject *pGOT
     if (eff < TOTAL_SPELL_EFFECTS)
         (*this.*SpellEffects[eff])(i);
     else
-        sLog.outError("WORLD: Spell FX %d > TOTAL_SPELL_EFFECTS ", eff);
+        sLog.outError("WORLD: Spell %u has effect %d at index %u > TOTAL_SPELL_EFFECTS",
+            m_spellInfo->Id, eff, i);
 }
 
 void Spell::AddTriggeredSpell(uint32 spellId)
@@ -5104,7 +5108,7 @@ SpellCastResult Spell::CheckCast(bool strict)
      */
 
     uint32 spellCat = m_spellInfo->Category;
-    if (m_IsCastByItem)
+    if (m_CastItem)
     {
         // Find correct item category matching the current spell on item
         // used when item spells have custom categories due to wrong category
@@ -5179,12 +5183,11 @@ SpellCastResult Spell::CheckCast(bool strict)
             sWorld.getConfig(CONFIG_BOOL_VMAP_INDOOR_CHECK) &&
             VMAP::VMapFactory::createOrGetVMapManager()->isLineOfSightCalcEnabled())
     {
-        if (m_spellInfo->Attributes & SPELL_ATTR_OUTDOORS_ONLY &&
-                !m_caster->GetTerrain()->IsOutdoors(m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ()))
+        auto isOutdoors = m_caster->GetTerrain()->IsOutdoors(m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ());
+        if (m_spellInfo->Attributes & SPELL_ATTR_OUTDOORS_ONLY && !isOutdoors)
             return SPELL_FAILED_ONLY_OUTDOORS;
 
-        if (m_spellInfo->Attributes & SPELL_ATTR_INDOORS_ONLY &&
-                m_caster->GetTerrain()->IsOutdoors(m_caster->GetPositionX(), m_caster->GetPositionY(), m_caster->GetPositionZ()))
+        if (m_spellInfo->Attributes & SPELL_ATTR_INDOORS_ONLY && isOutdoors)
             return SPELL_FAILED_ONLY_INDOORS;
     }
 
@@ -5279,6 +5282,13 @@ SpellCastResult Spell::CheckCast(bool strict)
         // Check spell max target level
         if ((m_spellInfo->MaxTargetLevel > 0) && (int32(target->getLevel()) > m_spellInfo->MaxTargetLevel))
             return SPELL_FAILED_HIGHLEVEL;
+
+#if SUPPORTED_CLIENT_BUILD <= CLIENT_BUILD_1_11_2
+        // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+        // - Pickpocket can now be used on targets that are in combat, as long as the rogue remains stealthed.
+        if ((m_spellInfo->AttributesEx & SPELL_ATTR_EX_IS_PICKPOCKET) && target->isInCombat())
+            return SPELL_FAILED_TARGET_IN_COMBAT;
+#endif
 
         bool non_caster_target = target != m_caster && !IsSpellWithCasterSourceTargetsOnly(m_spellInfo);
 
@@ -5449,7 +5459,7 @@ SpellCastResult Spell::CheckCast(bool strict)
                 return SPELL_FAILED_TARGET_AURASTATE;
 
         //Must be behind the target.
-        if (m_spellInfo->AttributesEx2 == 0x100000 && (m_spellInfo->AttributesEx & 0x200) == 0x200 && target->HasInArc(M_PI_F, m_caster))
+        if (IsFromBehindOnlySpell(m_spellInfo) && target->HasInArc(M_PI_F, m_caster))
         {
             SendInterrupted(2);
             return SPELL_FAILED_NOT_BEHIND;
@@ -6491,7 +6501,9 @@ SpellCastResult Spell::CheckCast(bool strict)
             }
             case SPELL_AURA_PERIODIC_MANA_LEECH:
             {
-                if (!m_targets.getUnitTarget())
+                if (!m_targets.getUnitTarget() && 
+                        !IsAreaEffectTarget(Targets(m_spellInfo->EffectImplicitTargetA[i])) &&
+                        !IsAreaEffectTarget(Targets(m_spellInfo->EffectImplicitTargetB[i])))
                     return SPELL_FAILED_BAD_IMPLICIT_TARGETS;
 
                 if (m_caster->GetTypeId() != TYPEID_PLAYER || m_CastItem)
@@ -6830,11 +6842,8 @@ SpellCastResult Spell::CheckRange(bool strict)
         }
     }
 
-    //add radius of caster and ~5 yds "give" for non stricred (landing) check
-    float range_mod = strict ? 1.25f : 6.25;
-
-    // Add leeway bonus if both units are moving
-    range_mod += m_caster->GetLeewayBonusRange(target);
+    // Add up to ~5 yds "give" for non strict (landing) check and leeway bonus if both units are moving
+    float const range_mod = (strict ? (m_caster->IsPlayer() ? 1.25f : 0.0f) : (m_caster->IsPlayer() ? 6.25f : 2.25f)) + m_caster->GetLeewayBonusRange(target);
 
     SpellRangeEntry const* srange = sSpellRangeStore.LookupEntry(m_spellInfo->rangeIndex);
     float max_range = GetSpellMaxRange(srange);
@@ -6845,19 +6854,18 @@ SpellCastResult Spell::CheckRange(bool strict)
 
     max_range += range_mod;
 
-    GameObject* go = m_targets.getGOTarget(); // Check range d'un gobj pour crochetage
+    GameObject* go = m_targets.getGOTarget(); // Check range for gobjects (lock picking)
     if (go)
     {
-        // distance from target in checks
-        float dist = m_caster->GetDistance(go);
+        float const dist = m_caster->GetDistance(go);
 
         if (dist > max_range)
             return SPELL_FAILED_OUT_OF_RANGE;
     }
+
     if (target && target != m_caster)
     {
-        // distance from target in checks
-        float dist = m_caster->GetCombatDistance(target);
+        float const dist = m_caster->GetCombatDistance(target);
 
         if (dist > max_range)
             return SPELL_FAILED_OUT_OF_RANGE;

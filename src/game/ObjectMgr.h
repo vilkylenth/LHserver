@@ -205,6 +205,12 @@ enum
     QUESTGIVER_TYPE_MAX = 2,
 };
 
+struct TrainerGreetingLocale
+{
+    TrainerGreetingLocale() { }
+    std::vector<std::string> Content;                       // 0 -> default, i -> i-1 locale index
+};
+
 typedef UNORDERED_MAP<uint32,CreatureData> CreatureDataMap;
 typedef CreatureDataMap::value_type CreatureDataPair;
 
@@ -261,6 +267,7 @@ typedef UNORDERED_MAP<uint32,QuestGreetingLocale> QuestGreetingLocaleMap;
 typedef UNORDERED_MAP<uint32,GossipMenuItemsLocale> GossipMenuItemsLocaleMap;
 typedef UNORDERED_MAP<uint32,PointOfInterestLocale> PointOfInterestLocaleMap;
 typedef UNORDERED_MAP<uint32,AreaLocale> AreaLocaleMap;
+typedef UNORDERED_MAP<uint32, TrainerGreetingLocale> TrainerGreetingLocaleMap;
 
 typedef std::multimap<int32, uint32> ExclusiveQuestGroupsMap;
 typedef std::multimap<uint32, ItemRequiredTarget> ItemRequiredTargetMap;
@@ -394,7 +401,7 @@ SkillRangeType GetSkillRangeType(SkillLineEntry const *pSkill, bool racial);
 #define MAX_PET_NAME             12                         // max allowed by client name length
 #define MAX_CHARTER_NAME         24                         // max allowed by client name length
 
-bool normalizePlayerName(std::string& name);
+bool normalizePlayerName(std::string& name, size_t max_len = MAX_INTERNAL_PLAYER_NAME);
 
 struct MANGOS_DLL_SPEC LanguageDesc
 {
@@ -476,7 +483,7 @@ enum PermVariables
     VAR_PERM_4      = 30007,
 
     DEF_ALIVE_COUNT = 4,        // default alive dragons count for VAR_ALIVE_COUNT
-    DEF_STOP_DELAY  = 5,        // default times event check will not stop the event
+    DEF_STOP_DELAY  = 20,        // default times event check will not stop the event
 
     NPC_YSONDRE     = 14887,
     NPC_LETHON      = 14888,
@@ -612,7 +619,6 @@ class ObjectMgr
         uint32 GetCreatureModelOtherTeamModel(uint32 modelId);
 
         EquipmentInfo const *GetEquipmentInfo( uint32 entry );
-        EquipmentInfoRaw const *GetEquipmentInfoRaw( uint32 entry );
         static CreatureDataAddon const *GetCreatureAddon( uint32 lowguid )
         {
             return sCreatureDataAddonStorage.LookupEntry<CreatureDataAddon>(lowguid);
@@ -775,6 +781,7 @@ class ObjectMgr
         void LoadBroadcastTexts();
         void LoadBroadcastTextLocales();
         bool LoadQuestGreetings();
+        bool LoadTrainerGreetings();
         void LoadPetCreateSpells();
         void LoadCreatureLocales();
         void LoadCreatureTemplates();
@@ -1043,6 +1050,13 @@ class ObjectMgr
             return &itr->second;
         }
 
+        TrainerGreetingLocale const* GetTrainerGreetingLocale(uint32 entry) const
+        {
+            auto itr = mTrainerGreetingLocaleMap.find(entry);
+            if (itr == mTrainerGreetingLocaleMap.end()) return nullptr;
+            return &itr->second;
+        }
+
         // global grid objects state (static DB spawns, global spawn mods from gameevent system)
         CellObjectGuids const& GetCellObjectGuids(uint16 mapid, uint32 cell_id)
         {
@@ -1136,7 +1150,7 @@ class ObjectMgr
             return &iter->second;
         }
 
-        void AddVendorItem(uint32 entry,uint32 item, uint32 maxcount, uint32 incrtime);
+        void AddVendorItem(uint32 entry,uint32 item, uint32 maxcount, uint32 incrtime, uint32 itemflags);
         bool RemoveVendorItem(uint32 entry,uint32 item);
         bool IsVendorItemValid(bool isTemplate, char const* tableName, uint32 vendor_entry, uint32 item, uint32 maxcount, uint32 ptime, Player* pl = nullptr, std::set<uint32>* skip_vendors = nullptr) const;
 
@@ -1405,6 +1419,8 @@ class ObjectMgr
         MangosStringLocaleMap mMangosStringLocaleMap;
         BroadcastTextLocaleMap mBroadcastTextLocaleMap;
         QuestGreetingLocaleMap mQuestGreetingLocaleMap[QUESTGIVER_TYPE_MAX];
+        TrainerGreetingLocaleMap m_trainerGreetingMap;
+        TrainerGreetingLocaleMap mTrainerGreetingLocaleMap;
         GossipMenuItemsLocaleMap mGossipMenuItemsLocaleMap;
         PointOfInterestLocaleMap mPointOfInterestLocaleMap;
         AreaLocaleMap mAreaLocaleMap;
